@@ -4,8 +4,8 @@ Console application to act as a plugin for the [Matric](https://matricapp.com/) 
 It queries TP-Link Kasa devices configured in appsettings.json and updates the state of either buttons or server variables (Matric 2.8+) in Matric.
 
 # Requirements
-[Python](https://www.python.org/downloads/release/) (tested with Python 3.12)
-[PyKasa](https://github.com/python-kasa/python-kasa)
+- [Python](https://www.python.org/downloads/release/) (tested with Python 3.12)<br/>
+- [PyKasa](https://github.com/python-kasa/python-kasa)<br/>
 
 # Appsettings
     {
