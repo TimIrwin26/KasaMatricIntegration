@@ -6,7 +6,7 @@
         public string? DeviceIp { get; set; }
         public string? Outlet { get; set; }
 
-        private bool _isOn = false;
+        private bool _isOn;
         public bool IsOn
         {
             get => _isOn;

@@ -1,7 +1,6 @@
-﻿using PyKasa.Net;
-using Python.Runtime;
+﻿using Python.Runtime;
 
-namespace KasaConsole.Kasa
+namespace PyKasa.Net
 {
     public sealed class KasaSwitch : IDisposable
     {
@@ -54,12 +53,9 @@ namespace KasaConsole.Kasa
             {
                 dynamic asyncio = Py.Import("asyncio");
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy());
-                dynamic runner = asyncio.Runner();
+                var runner = asyncio.Runner();
                 var device = Device(Py.Import("kasa"), runner);
-                if (on)
-                    runner.run(device.turn_on());
-                else
-                    runner.run(device.turn_off());
+                runner.run(on ? device.turn_on() : device.turn_off());
 
                 runner.run(device.update());
 
@@ -69,14 +65,13 @@ namespace KasaConsole.Kasa
 
         private dynamic Device(dynamic kasa, dynamic? runner = null)
         {
-            dynamic asyncio;
             if (runner == null)
             {
-                asyncio = Py.Import("asyncio");
+                dynamic asyncio = Py.Import("asyncio");
                 runner = asyncio.Runner();
             }
 
-            dynamic device = runner.run(kasa.Discover.connect_single(Address, timeout: Timeout));
+            var device = runner.run(kasa.Discover.connect_single(Address, timeout: Timeout));
             runner.run(device.update());
 
             if (!device.is_strip) return device;

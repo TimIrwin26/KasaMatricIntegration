@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Matric\Configuration.cs" />
+    <Compile Remove="MatricIntegration\Configuration.cs" />
   </ItemGroup>
 
   <ItemGroup>

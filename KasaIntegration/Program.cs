@@ -1,4 +1,4 @@
-﻿using KasaIntegration;
+﻿using KasaMatricIntegration.MatricIntegration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -11,7 +11,7 @@ builder.Services.AddLogging(logging =>
     logging.AddConsole();
     logging.AddDebug();
 });
-using IHost host = builder.Build();
+using var host = builder.Build();
 
 MatricPrompt.MatricPin(builder.Configuration);
 
