@@ -1,52 +1,52 @@
-﻿using KasaConsole.Kasa;
-using KasaMatricIntegration.Kasa;
+﻿using KasaMatricIntegration.Kasa;
 using KasaMatricIntegration.Matric;
 using Matric.Integration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using PyKasa.Net;
 
-namespace KasaIntegration
+namespace KasaMatricIntegration.MatricIntegration
 {
     internal class MatricService : BackgroundService
     {
         public static string ApplicationName = "MatricKasaIntegration";
 
-        private readonly IConfiguration Configuration;
-        private readonly MatricConfig Config = new MatricConfig();
-        private readonly ILogger Logger;
+        private readonly IConfiguration _configuration;
+        private readonly MatricConfig _config = new();
+        private readonly ILogger<MatricService> _logger;
 
-        private Matric.Integration.Matric? MatricInstance;
-        private string? ClientId;
+        private global::Matric.Integration.Matric? _matricInstance;
+        private string? _clientId;
 
-        private Exception? MatricError;
+        private Exception? _matricError;
 
         public MatricService(IConfiguration configuration, ILogger<MatricService> logger)
         {
-            Configuration = configuration;
-            Logger = logger;
-            configuration.Bind("Matric", Config);
+            _configuration = configuration;
+            _logger = logger;
+            configuration.Bind("Matric", _config);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             try
             {
-                MatricInstance = new Matric.Integration.Matric(ApplicationName, Configuration["Matric:Pin"], Convert.ToInt32(Configuration["Matric:ApiPort"]));
-                MatricInstance.OnError += Matric_OnError;
-                MatricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
-                MatricInstance.OnControlInteraction += Matric_OnControlInteraction;
-                MatricInstance.OnVariablesChanged += Matric_OnVariablesChanged;
-                MatricInstance.GetConnectedClients();
+                _matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
+                _matricInstance.OnError += Matric_OnError;
+                _matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
+                _matricInstance.OnControlInteraction += Matric_OnControlInteraction;
+                _matricInstance.OnVariablesChanged += Matric_OnVariablesChanged;
+                _matricInstance.GetConnectedClients();
 
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    if (MatricError != null) { throw MatricError; }
-                    if (ClientId != null)
+                    if (_matricError != null) { throw _matricError; }
+                    if (_clientId != null)
                     {
-                        SetKasaState(Config.KasaVariables, Config.KasaButtons);
+                        SetKasaState(_config.KasaVariables, _config.KasaButtons);
                     }
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(_config.PollingInterval), stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -54,7 +54,7 @@ namespace KasaIntegration
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "{Message}", ex.Message);
+                _logger.LogError(ex, "{Message}", ex.Message);
 
                 // Terminates this process and returns an exit code to the operating system.
                 // This is required to avoid the 'BackgroundServiceExceptionBehavior', which
@@ -68,25 +68,25 @@ namespace KasaIntegration
             }
         }
 
-        private void SetKasaState(IEnumerable<KasaVariable> kasaVariables, IEnumerable<KasaButton> kasaButtons)
+        private void SetKasaState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons)
         {
             CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
 
             var serverVariables = kasaVariables
                .Where(k => k.Changed)
                .Select(k => k.ToServerVariable());
-            MatricInstance?.SetVariables(serverVariables.ToList());
+            _matricInstance?.SetVariables(serverVariables.ToList());
 
             var buttons = kasaButtons
                .Where(k => k.Changed)
-               .Select(k=>k.ToButtonStateArgs());
+               .Select(k => k.ToButtonStateArgs());
 
-            MatricInstance?.SetButtonsVisualState(MatricInstance?.ClientId, buttons.ToList());
+            _matricInstance?.SetButtonsVisualState(_matricInstance?.ClientId, buttons.ToList());
         }
 
         private void CheckKasaState(IEnumerable<KasaItem> kasaItems)
         {
-            using var kasaSwitch = KasaSwitch.Factory(Configuration["PythonDll"] ?? "", "");
+            using var kasaSwitch = KasaSwitch.Factory(_configuration["PythonDll"] ?? "", "");
 
             foreach (var item in kasaItems.Where(k => !string.IsNullOrEmpty(k.DeviceIp)))
             {
@@ -101,17 +101,17 @@ namespace KasaIntegration
         private void Matric_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
         {
             Console.WriteLine("Server variables changed");
-            foreach (string varName in data.ChangedVariables)
+            foreach (var varName in data.ChangedVariables)
             {
                 Console.WriteLine($"{varName}: {data.Variables[varName].Value}");
-                var currentItem = Config.KasaVariables.FirstOrDefault(v => v.Name?.Equals(varName) ?? false);
+                var currentItem = _config.KasaVariables.FirstOrDefault(v => v.Name?.Equals(varName) ?? false);
                 if (currentItem == null) continue;
 
-                currentItem.IsOn = (bool)(data.Variables[varName].Value);
+                currentItem.IsOn = (bool)data.Variables[varName].Value;
             }
         }
 
-        private void Matric_OnError(Exception ex) => MatricError = ex;
+        private void Matric_OnError(Exception ex) => _matricError = ex;
 
         private static void Matric_OnControlInteraction(object sender, object data)
         {
@@ -123,6 +123,7 @@ namespace KasaIntegration
 
         public void UpdateClientsList(List<ClientInfo> connectedClients)
         {
+            // update to sleep / retry when no connected clients
             if (connectedClients.Count == 0)
             {
                 Console.WriteLine("No connected devices found, make sure your smartphone/tablet is connected\nPress any key to exit");
@@ -130,11 +131,11 @@ namespace KasaIntegration
                 Environment.Exit(0);
             }
             Console.WriteLine("Found devices:");
-            foreach (ClientInfo client in connectedClients)
+            foreach (var client in connectedClients)
             {
                 Console.WriteLine($@"{client.Id} {client.Name}");
             }
-            ClientId = connectedClients.FirstOrDefault()?.Id;
+            _clientId = connectedClients.FirstOrDefault()?.Id;
         }
     }
 }

@@ -2,7 +2,7 @@
 
 namespace KasaMatricIntegration.Kasa
 {
-    internal class KasaVariable: KasaItem
+    internal class KasaVariable : KasaItem
     {
         public ServerVariable ToServerVariable()
         {

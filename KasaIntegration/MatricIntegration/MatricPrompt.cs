@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 
-namespace KasaIntegration
+namespace KasaMatricIntegration.MatricIntegration
 {
     public static class MatricPrompt
     {
@@ -9,7 +9,7 @@ namespace KasaIntegration
             if (!string.IsNullOrEmpty(configuration["Matric:Pin"])) return configuration["Matric:Pin"] ?? "";
 
             Console.WriteLine("Authorize connection in MATRIC, then enter PIN:");
-            var matric = new Matric.Integration.Matric(MatricService.ApplicationName, Convert.ToInt32(configuration["Matric:ApiPort"]));
+            var matric = new global::Matric.Integration.Matric(MatricService.ApplicationName, Convert.ToInt32(configuration["Matric:ApiPort"]));
             matric.RequestAuthorizePrompt();
             configuration["Matric:Pin"] = Console.ReadLine();
 

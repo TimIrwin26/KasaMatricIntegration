@@ -4,13 +4,13 @@ namespace PyKasa.Net
 {
     public static class PythonEnvironment
     {
-        private static bool _initialized = false;
-        public static void StartUp(string pythonDLL)
+        private static bool _initialized;
+        public static void StartUp(string pythonDll)
         {
             if (_initialized) return;
 
             // should be in config
-            Runtime.PythonDLL = pythonDLL;
+            Runtime.PythonDLL = pythonDll;
             PythonEngine.Initialize();
             PythonEngine.BeginAllowThreads();
 
