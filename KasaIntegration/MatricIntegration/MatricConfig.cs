@@ -6,8 +6,9 @@ namespace KasaMatricIntegration.Matric
     {
         public string Pin { get; set; } = "";
         public int ApiPort { get; set; } = 50300;
-        public int PollingInterval { get; set; } = 5;
-        public List<KasaVariable> KasaVariables { get; set; } = new();
-        public List<KasaButton> KasaButtons { get; set; } = new();
+        public int KasaPollingIntervalSeconds { get; set; } = 5;
+        public int MatricPollingIntervalSeconds { get; set; } = 10;
+        public List<KasaVariable> KasaVariables { get; set; } = [];
+        public List<KasaButton> KasaButtons { get; set; } = [];
     }
 }

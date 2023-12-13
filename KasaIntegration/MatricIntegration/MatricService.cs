@@ -17,7 +17,7 @@ namespace KasaMatricIntegration.MatricIntegration
         private readonly ILogger<MatricService> _logger;
 
         private global::Matric.Integration.Matric? _matricInstance;
-        private string? _clientId;
+        private List<ClientInfo> _connectedClients = [];
 
         private Exception? _matricError;
 
@@ -32,21 +32,35 @@ namespace KasaMatricIntegration.MatricIntegration
         {
             try
             {
-                _matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
-                _matricInstance.OnError += Matric_OnError;
-                _matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
-                _matricInstance.OnControlInteraction += Matric_OnControlInteraction;
-                _matricInstance.OnVariablesChanged += Matric_OnVariablesChanged;
-                _matricInstance.GetConnectedClients();
-
                 while (!stoppingToken.IsCancellationRequested)
                 {
+                    //try
+                    //{
                     if (_matricError != null) { throw _matricError; }
-                    if (_clientId != null)
+
+                    if (_matricInstance == null)
+                        AttachMatricApp();
+
+                    if (_matricInstance == null) continue;
+
+                    if (_connectedClients.Count != 0)
                     {
                         SetKasaState(_config.KasaVariables, _config.KasaButtons);
                     }
-                    await Task.Delay(TimeSpan.FromSeconds(_config.PollingInterval), stoppingToken);
+                    else
+                    {
+                        _matricInstance?.GetConnectedClients();
+                    }
+                    //}
+                    //catch (SocketException se)
+                    //{
+                    //    _matricError = null;
+                    //    _logger.LogError(se, "{Message}", se.Message);
+
+                    //    Environment.Exit(1);
+                    //}
+
+                    await Task.Delay(TimeSpan.FromSeconds(_connectedClients.Count == 0 ? _config.MatricPollingIntervalSeconds : _config.KasaPollingIntervalSeconds), stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -68,6 +82,17 @@ namespace KasaMatricIntegration.MatricIntegration
             }
         }
 
+        private void AttachMatricApp()
+        {
+            _matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
+            _logger.LogDebug("{Message}", "Connected to matric instance");
+            _matricInstance.OnError += Matric_OnError;
+            _matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
+            // _matricInstance.OnControlInteraction += Matric_OnControlInteraction;
+            _matricInstance.OnVariablesChanged += Matric_OnVariablesChanged;
+            // _matricInstance.GetConnectedClients();
+        }
+
         private void SetKasaState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons)
         {
             CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
@@ -75,13 +100,20 @@ namespace KasaMatricIntegration.MatricIntegration
             var serverVariables = kasaVariables
                .Where(k => k.Changed)
                .Select(k => k.ToServerVariable());
-            _matricInstance?.SetVariables(serverVariables.ToList());
+
+            if (serverVariables.Any())
+                _matricInstance?.SetVariables(serverVariables.ToList());
 
             var buttons = kasaButtons
                .Where(k => k.Changed)
                .Select(k => k.ToButtonStateArgs());
 
-            _matricInstance?.SetButtonsVisualState(_matricInstance?.ClientId, buttons.ToList());
+            if (!buttons.Any()) return;
+
+            foreach (var client in _connectedClients)
+            {
+                _matricInstance?.SetButtonsVisualState(client.Id, buttons.ToList());
+            }
         }
 
         private void CheckKasaState(IEnumerable<KasaItem> kasaItems)
@@ -100,10 +132,10 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private void Matric_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
         {
-            Console.WriteLine("Server variables changed");
+            _logger.LogDebug("Server variables changed");
             foreach (var varName in data.ChangedVariables)
             {
-                Console.WriteLine($"{varName}: {data.Variables[varName].Value}");
+                _logger.LogDebug("{Message}", $"{varName}: {data.Variables[varName].Value}");
                 var currentItem = _config.KasaVariables.FirstOrDefault(v => v.Name?.Equals(varName) ?? false);
                 if (currentItem == null) continue;
 
@@ -113,29 +145,23 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private void Matric_OnError(Exception ex) => _matricError = ex;
 
-        private static void Matric_OnControlInteraction(object sender, object data)
-        {
-            Console.WriteLine("Control interaction:");
-            Console.WriteLine(data.ToString());
-        }
+        //private void Matric_OnControlInteraction(object sender, object data)
+        //{
+        //    _logger.LogDebug("Control interaction:");
+        //    _logger.LogDebug(data.ToString());
+        //}
 
         private void Matric_OnConnectedClientsReceived(object source, List<ClientInfo> clients) => UpdateClientsList(clients);
 
         public void UpdateClientsList(List<ClientInfo> connectedClients)
         {
-            // update to sleep / retry when no connected clients
-            if (connectedClients.Count == 0)
-            {
-                Console.WriteLine("No connected devices found, make sure your smartphone/tablet is connected\nPress any key to exit");
-                Console.ReadKey();
-                Environment.Exit(0);
-            }
-            Console.WriteLine("Found devices:");
+            _connectedClients = connectedClients;
+            _logger.LogDebug("{Message}", $"Connected with {connectedClients.Count} clients.");
+
             foreach (var client in connectedClients)
             {
-                Console.WriteLine($@"{client.Id} {client.Name}");
+                _logger.LogDebug("{Message}", $"Client: {client.Name}");
             }
-            _clientId = connectedClients.FirstOrDefault()?.Id;
         }
     }
 }
