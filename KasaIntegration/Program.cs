@@ -13,7 +13,7 @@ builder.Services.AddWindowsService(options =>
 builder.Services.AddLogging(logging =>
 {
     logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-
+    logging.AddFile(builder.Configuration.GetSection("Logging"));
 #if(DEBUG)
     logging.AddConsole();
     logging.AddDebug();

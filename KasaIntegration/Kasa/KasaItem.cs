@@ -6,6 +6,8 @@
         public string? DeviceIp { get; set; }
         public string? Outlet { get; set; }
 
+        public int Faults { get; set; }
+
         private bool _isOn;
         public bool IsOn
         {

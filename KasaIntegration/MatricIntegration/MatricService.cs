@@ -5,6 +5,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PyKasa.Net;
+using Python.Runtime;
+using System.Collections.Concurrent;
 
 namespace KasaMatricIntegration.MatricIntegration
 {
@@ -16,9 +18,15 @@ namespace KasaMatricIntegration.MatricIntegration
         private readonly MatricConfig _config = new();
         private readonly ILogger<MatricService> _logger;
 
-        private global::Matric.Integration.Matric? _matricInstance;
-        private List<ClientInfo> _connectedClients = [];
+        private Lazy<global::Matric.Integration.Matric> _matricInstance;
+        private global::Matric.Integration.Matric MatricInstance => _matricInstance.Value;
 
+        private ConcurrentBag<ClientInfo> _connectedClients = [];
+        private const int MatricClientRecheckFrequency = 100;
+        private int MatricClientRecheckCountdown;
+
+        private readonly ConcurrentDictionary<KasaItem, int> _deviceFaults = [];
+        public const int MaxFaults = 10;
         private Exception? _matricError;
 
         public MatricService(IConfiguration configuration, ILogger<MatricService> logger)
@@ -26,6 +34,7 @@ namespace KasaMatricIntegration.MatricIntegration
             _configuration = configuration;
             _logger = logger;
             configuration.Bind("Matric", _config);
+            _matricInstance = new Lazy<global::Matric.Integration.Matric>(AttachMatricApp);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -34,33 +43,16 @@ namespace KasaMatricIntegration.MatricIntegration
             {
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    //try
-                    //{
                     if (_matricError != null) { throw _matricError; }
 
-                    if (_matricInstance == null)
-                        AttachMatricApp();
+                    CheckForNewClients();
 
-                    if (_matricInstance == null) continue;
-
-                    if (_connectedClients.Count != 0)
+                    if (!_connectedClients.IsEmpty)
                     {
                         SetKasaState(_config.KasaVariables, _config.KasaButtons);
                     }
-                    else
-                    {
-                        _matricInstance?.GetConnectedClients();
-                    }
-                    //}
-                    //catch (SocketException se)
-                    //{
-                    //    _matricError = null;
-                    //    _logger.LogError(se, "{Message}", se.Message);
 
-                    //    Environment.Exit(1);
-                    //}
-
-                    await Task.Delay(TimeSpan.FromSeconds(_connectedClients.Count == 0 ? _config.MatricPollingIntervalSeconds : _config.KasaPollingIntervalSeconds), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(_connectedClients.IsEmpty ? _config.MatricPollingIntervalSeconds : _config.KasaPollingIntervalSeconds), stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -80,17 +72,27 @@ namespace KasaMatricIntegration.MatricIntegration
                 // recovery options, we need to terminate the process with a non-zero exit code.
                 Environment.Exit(1);
             }
+        }    
+
+        private global::Matric.Integration.Matric AttachMatricApp()
+        {
+            global::Matric.Integration.Matric matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
+            _logger.LogDebug("{Message}", "Connected to matric instance");
+            matricInstance.OnError += Matric_OnError;
+            matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
+
+            return matricInstance;
         }
 
-        private void AttachMatricApp()
+        private void CheckForNewClients()
         {
-            _matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
-            _logger.LogDebug("{Message}", "Connected to matric instance");
-            _matricInstance.OnError += Matric_OnError;
-            _matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
-            // _matricInstance.OnControlInteraction += Matric_OnControlInteraction;
-            _matricInstance.OnVariablesChanged += Matric_OnVariablesChanged;
-            // _matricInstance.GetConnectedClients();
+            // check for new client connections
+            MatricClientRecheckCountdown--;
+            if (MatricClientRecheckCountdown <= 0)
+            {
+                MatricInstance.GetConnectedClients();
+                MatricClientRecheckCountdown = _connectedClients.IsEmpty ? 1 : MatricClientRecheckFrequency;
+            }
         }
 
         private void SetKasaState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons)
@@ -102,7 +104,7 @@ namespace KasaMatricIntegration.MatricIntegration
                .Select(k => k.ToServerVariable());
 
             if (serverVariables.Any())
-                _matricInstance?.SetVariables(serverVariables.ToList());
+                MatricInstance.SetVariables(serverVariables.ToList());
 
             var buttons = kasaButtons
                .Where(k => k.Changed)
@@ -112,7 +114,7 @@ namespace KasaMatricIntegration.MatricIntegration
 
             foreach (var client in _connectedClients)
             {
-                _matricInstance?.SetButtonsVisualState(client.Id, buttons.ToList());
+                MatricInstance.SetButtonsVisualState(client.Id, buttons.ToList());
             }
         }
 
@@ -120,46 +122,55 @@ namespace KasaMatricIntegration.MatricIntegration
         {
             using var kasaSwitch = KasaSwitch.Factory(_configuration["PythonDll"] ?? "", "");
 
-            foreach (var item in kasaItems.Where(k => !string.IsNullOrEmpty(k.DeviceIp)))
+            foreach (var item in kasaItems.Where(k => k != null && !string.IsNullOrEmpty(k.DeviceIp)))
             {
+                CheckSwitch(kasaSwitch, item);
+            }
+        }
+
+        private void CheckSwitch(KasaSwitch kasaSwitch, KasaItem item)
+        {
+            _logger.LogDebug("Checking switch at {ip}", item.DeviceIp);
+            try
+            {
+                var countdown = _deviceFaults.GetValueOrDefault(item);
+                countdown--;
+                if (countdown > 0)
+                {
+                    _deviceFaults.AddOrUpdate(item, countdown, (key, value) => countdown);
+                    return; // skip call if not down to 0
+                }
+
 #pragma warning disable CS8601 // Possible null reference argument.
                 kasaSwitch.Address = item.DeviceIp;
 #pragma warning restore CS8601 // Possible null reference argument.
                 kasaSwitch.Outlet = item.Outlet;
                 item.IsOn = kasaSwitch.IsOn;
+
+                // success
+                item.Faults = 0;
+                _deviceFaults.Remove(item, out countdown);
             }
-        }
-
-        private void Matric_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
-        {
-            _logger.LogDebug("Server variables changed");
-            foreach (var varName in data.ChangedVariables)
+            catch (PythonException pe)
             {
-                _logger.LogDebug("{Message}", $"{varName}: {data.Variables[varName].Value}");
-                var currentItem = _config.KasaVariables.FirstOrDefault(v => v.Name?.Equals(varName) ?? false);
-                if (currentItem == null) continue;
-
-                currentItem.IsOn = (bool)data.Variables[varName].Value;
+                item.Faults++;
+                _logger.LogError("Exception #{count} connecting to {device} at {ip}: {exception}", item.Faults, item.Name, item.DeviceIp, pe.Message);
+                _deviceFaults.AddOrUpdate(item, item.Faults, (key, value) => 2 ^ Math.Max(MaxFaults, item.Faults));
             }
         }
 
         private void Matric_OnError(Exception ex) => _matricError = ex;
 
-        //private void Matric_OnControlInteraction(object sender, object data)
-        //{
-        //    _logger.LogDebug("Control interaction:");
-        //    _logger.LogDebug(data.ToString());
-        //}
-
         private void Matric_OnConnectedClientsReceived(object source, List<ClientInfo> clients) => UpdateClientsList(clients);
 
         public void UpdateClientsList(List<ClientInfo> connectedClients)
         {
-            _connectedClients = connectedClients;
+            _connectedClients.Clear(); // not the greatest idea from a threaded perspective
             _logger.LogDebug("{Message}", $"Connected with {connectedClients.Count} clients.");
 
             foreach (var client in connectedClients)
             {
+                _connectedClients.Add(client);
                 _logger.LogDebug("{Message}", $"Client: {client.Name}");
             }
         }
