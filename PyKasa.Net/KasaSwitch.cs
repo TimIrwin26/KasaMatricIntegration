@@ -2,7 +2,7 @@
 
 namespace PyKasa.Net
 {
-    public sealed class KasaSwitch : IDisposable
+    public sealed class KasaSwitch : IKasaSwitch, IDisposable
     {
         private KasaSwitch(string address, string? outlet, int timeout)
         {
@@ -13,9 +13,8 @@ namespace PyKasa.Net
 
         public static KasaSwitch Factory(string pythonDll, string address, string? outlet = null, int timeout = 20)
         {
-            var kasaSwitch = new KasaSwitch(address, outlet, timeout);
             InitializePython(pythonDll);
-            return kasaSwitch;
+            return new KasaSwitch(address, outlet, timeout);
         }
 
         public string Address { get; set; }
@@ -37,42 +36,41 @@ namespace PyKasa.Net
         {
             get
             {
-                using (Py.GIL())
-                {
-                    var device = Device(Py.Import("kasa"));
-                    return device.is_on.As<bool>();
-                }
+                using var environment = KasaCallEnvironment.CreateEnvironment();
+                return Device(environment).is_on;
             }
         }
+
         public bool TurnOn() => SwitchDevice(true);
         public bool TurnOff() => SwitchDevice(false);
 
-        private bool SwitchDevice(bool on)
+        public bool ToggleDevice()
         {
-            using (Py.GIL())
-            {
-                dynamic asyncio = Py.Import("asyncio");
-                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy());
-                var runner = asyncio.Runner();
-                var device = Device(Py.Import("kasa"), runner);
-                runner.run(on ? device.turn_on() : device.turn_off());
-
-                runner.run(device.update());
-
-                return device.is_on;
-            }
+            using var environment = KasaCallEnvironment.CreateEnvironment();
+            var device = Device(environment);
+            return SwitchDevice(!device.device.is_on, environment, device);
         }
 
-        private dynamic Device(dynamic kasa, dynamic? runner = null)
+        public bool SwitchDevice(bool on)
         {
-            if (runner == null)
-            {
-                dynamic asyncio = Py.Import("asyncio");
-                runner = asyncio.Runner();
-            }
+            using var environment = KasaCallEnvironment.CreateEnvironment();
+            return SwitchDevice(on, environment);
+        }
 
-            var device = runner.run(kasa.Discover.connect_single(Address, timeout: Timeout));
-            runner.run(device.update());
+        private bool SwitchDevice(bool on, KasaCallEnvironment environment, dynamic? device = null)
+        {
+            device ??= Device(environment);
+
+            environment.Runner.run(on ? device.turn_on() : device.turn_off());
+            environment.Runner.run(device.update());
+
+            return device.is_on;
+        }
+
+        private dynamic Device(KasaCallEnvironment environment)
+        {
+            var device = environment.Runner.run(environment.Kasa.Discover.connect_single(Address, timeout: Timeout));
+            environment.Runner.run(device.update());
 
             if (!device.is_strip) return device;
             if (Outlet == null)
@@ -83,7 +81,7 @@ namespace PyKasa.Net
 
         public void Dispose()
         {
-            PythonEnvironment.Shutdown();
+//            PythonEnvironment.Shutdown();
         }
     }
 }

@@ -27,7 +27,11 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private readonly ConcurrentDictionary<KasaItem, int> _deviceFaults = [];
         public const int MaxFaults = 10;
+        private const string PressEvent = "press";
+        private const string ReleaseEvent = "Release";
         private Exception? _matricError;
+
+        IEnumerable<string?> KasaVariableNames => _config.KasaVariables.Select(v => v.Name);
 
         public MatricService(IConfiguration configuration, ILogger<MatricService> logger)
         {
@@ -72,7 +76,7 @@ namespace KasaMatricIntegration.MatricIntegration
                 // recovery options, we need to terminate the process with a non-zero exit code.
                 Environment.Exit(1);
             }
-        }    
+        }
 
         private global::Matric.Integration.Matric AttachMatricApp()
         {
@@ -80,9 +84,39 @@ namespace KasaMatricIntegration.MatricIntegration
             _logger.LogDebug("{Message}", "Connected to matric instance");
             matricInstance.OnError += Matric_OnError;
             matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
+            //matricInstance.OnVariablesChanged += MatricInstance_OnVariablesChanged;
+            matricInstance.OnControlInteraction += MatricInstance_OnControlInteraction;
 
             return matricInstance;
         }
+
+        private void MatricInstance_OnControlInteraction(object sender, object data)
+        {
+            if (_config.KasaButtons.Count == 0) return;
+            if (data == null) return;
+#pragma warning disable CS8604 // Possible null reference argument.
+            var controlData = ControlInteractionData.Parse(data.ToString());
+#pragma warning restore CS8604 // Possible null reference argument.
+            if (controlData == null) return;
+
+            var button = _config.KasaButtons
+                .Where(b => string.Compare(b.Id, controlData.MessageData?.ControlId, StringComparison.OrdinalIgnoreCase) == 0)
+                .FirstOrDefault();
+
+            if (button == null) return;
+
+            using var kasaSwitch = KasaSwitch.Factory(_configuration["PythonDll"] ?? "", button?.DeviceIp ?? "");
+
+            kasaSwitch.SwitchDevice(controlData?.MessageData?.EventName == PressEvent);
+        }
+
+        //private void MatricInstance_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
+        //{
+        //    var kasaVariables = _config.KasaVariables.Select(v => v.Name);
+        //    if (!data.ChangedVariables.Intersect(kasaVariables).Any()) return;
+
+
+        //}
 
         private void CheckForNewClients()
         {
@@ -99,13 +133,23 @@ namespace KasaMatricIntegration.MatricIntegration
         {
             CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
 
+            SetKasaVariables(kasaVariables);
+
+            SetKasaButtons(kasaButtons);
+        }      
+
+        private void SetKasaVariables(IReadOnlyCollection<KasaVariable> kasaVariables)
+        {
             var serverVariables = kasaVariables
                .Where(k => k.Changed)
                .Select(k => k.ToServerVariable());
 
             if (serverVariables.Any())
                 MatricInstance.SetVariables(serverVariables.ToList());
+        }
 
+        private void SetKasaButtons(IReadOnlyCollection<KasaButton> kasaButtons)
+        {
             var buttons = kasaButtons
                .Where(k => k.Changed)
                .Select(k => k.ToButtonStateArgs());
@@ -133,13 +177,8 @@ namespace KasaMatricIntegration.MatricIntegration
             _logger.LogDebug("Checking switch at {ip}", item.DeviceIp);
             try
             {
-                var countdown = _deviceFaults.GetValueOrDefault(item);
-                countdown--;
-                if (countdown > 0)
-                {
-                    _deviceFaults.AddOrUpdate(item, countdown, (key, value) => countdown);
-                    return; // skip call if not down to 0
-                }
+                var countdown = _deviceFaults.AddOrUpdate(item, 0, (key, value) => value--);
+                if (countdown > 0) return;
 
 #pragma warning disable CS8601 // Possible null reference argument.
                 kasaSwitch.Address = item.DeviceIp;
@@ -173,6 +212,10 @@ namespace KasaMatricIntegration.MatricIntegration
                 _connectedClients.Add(client);
                 _logger.LogDebug("{Message}", $"Client: {client.Name}");
             }
+
+            if (_connectedClients.IsEmpty) return;
+
+            SetKasaState(_config.KasaVariables, _config.KasaButtons);
         }
     }
 }
