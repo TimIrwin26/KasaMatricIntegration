@@ -17,6 +17,7 @@ namespace KasaMatricIntegration.MatricIntegration
         private readonly IConfiguration _configuration;
         private readonly MatricConfig _config = new();
         private readonly ILogger<MatricService> _logger;
+        private readonly IKasaDeviceFactory _kasaDeviceFactory;
 
         private Lazy<global::Matric.Integration.Matric> _matricInstance;
         private global::Matric.Integration.Matric MatricInstance => _matricInstance.Value;
@@ -33,12 +34,13 @@ namespace KasaMatricIntegration.MatricIntegration
 
         IEnumerable<string?> KasaVariableNames => _config.KasaVariables.Select(v => v.Name);
 
-        public MatricService(IConfiguration configuration, ILogger<MatricService> logger)
+        public MatricService(IKasaDeviceFactory kasaSwitchFactory, IConfiguration configuration, ILogger<MatricService> logger)
         {
             _configuration = configuration;
             _logger = logger;
             configuration.Bind("Matric", _config);
             _matricInstance = new Lazy<global::Matric.Integration.Matric>(AttachMatricApp);
+            _kasaDeviceFactory = kasaSwitchFactory;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -105,9 +107,9 @@ namespace KasaMatricIntegration.MatricIntegration
 
             if (button == null) return;
 
-            using var kasaSwitch = KasaSwitch.Factory(_configuration["PythonDll"] ?? "", button?.DeviceIp ?? "");
+            var kasaDevice = _kasaDeviceFactory.CreateDevice(button?.DeviceIp ?? "");
 
-            kasaSwitch.SwitchDevice(controlData?.MessageData?.EventName == PressEvent);
+            kasaDevice.SwitchDevice(controlData?.MessageData?.EventName == PressEvent);
         }
 
         //private void MatricInstance_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
@@ -136,7 +138,7 @@ namespace KasaMatricIntegration.MatricIntegration
             SetKasaVariables(kasaVariables);
 
             SetKasaButtons(kasaButtons);
-        }      
+        }
 
         private void SetKasaVariables(IReadOnlyCollection<KasaVariable> kasaVariables)
         {
@@ -164,27 +166,27 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private void CheckKasaState(IEnumerable<KasaItem> kasaItems)
         {
-            using var kasaSwitch = KasaSwitch.Factory(_configuration["PythonDll"] ?? "", "");
+            var kasaDevice = _kasaDeviceFactory.CreateDevice();
 
             foreach (var item in kasaItems.Where(k => k != null && !string.IsNullOrEmpty(k.DeviceIp)))
             {
-                CheckSwitch(kasaSwitch, item);
+                CheckDevice(kasaDevice, item);
             }
         }
 
-        private void CheckSwitch(KasaSwitch kasaSwitch, KasaItem item)
+        private void CheckDevice(IKasaDevice kasaDevice, KasaItem item)
         {
-            _logger.LogDebug("Checking switch at {ip}", item.DeviceIp);
+            _logger.LogDebug("Checking device at {ip}", item.DeviceIp);
             try
             {
                 var countdown = _deviceFaults.AddOrUpdate(item, 0, (key, value) => value--);
                 if (countdown > 0) return;
 
 #pragma warning disable CS8601 // Possible null reference argument.
-                kasaSwitch.Address = item.DeviceIp;
+                kasaDevice.Address = item.DeviceIp;
 #pragma warning restore CS8601 // Possible null reference argument.
-                kasaSwitch.Outlet = item.Outlet;
-                item.IsOn = kasaSwitch.IsOn;
+                kasaDevice.Outlet = item.Outlet;
+                item.IsOn = kasaDevice.IsOn;
 
                 // success
                 item.Faults = 0;

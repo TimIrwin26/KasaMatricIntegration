@@ -1,10 +1,20 @@
 ﻿using KasaMatricIntegration.MatricIntegration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using PyKasa.Net;
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddHostedService<MatricService>(); 
+builder.Services.AddSingleton<IKasaDeviceFactory>((service) =>
+{
+    var configuration = service.GetService<IConfiguration>()?.GetSection("Python");
+    var dll = configuration?["PythonDll"] ?? string.Empty;
+    var timeout = configuration?.GetValue<int?>("timeout") ?? 20;
+    return new KasaDeviceFactory(dll, timeout);
+});
+
+builder.Services.AddHostedService<MatricService>();
 builder.Services.AddWindowsService(options =>
 {
     options.ServiceName = "Kasa Matric Integration";
@@ -12,9 +22,10 @@ builder.Services.AddWindowsService(options =>
 
 builder.Services.AddLogging(logging =>
 {
-    logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-    logging.AddFile(builder.Configuration.GetSection("Logging"));
-#if(DEBUG)
+    var loggingSection = builder.Configuration.GetSection("Logging");
+    logging.AddConfiguration(loggingSection);
+    logging.AddFile(loggingSection);
+#if DEBUG
     logging.AddConsole();
     logging.AddDebug();
 #endif

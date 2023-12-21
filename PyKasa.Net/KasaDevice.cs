@@ -1,36 +1,19 @@
-﻿using Python.Runtime;
+﻿using PyKasa.Net.KasaDeviceException;
 
 namespace PyKasa.Net
 {
-    public sealed class KasaSwitch : IKasaSwitch, IDisposable
+    public sealed class KasaDevice : IKasaDevice
     {
-        private KasaSwitch(string address, string? outlet, int timeout)
+        internal KasaDevice(string address, string? outlet, int timeout)
         {
             Address = address;
             Outlet = outlet;
             Timeout = timeout;
         }
-
-        public static KasaSwitch Factory(string pythonDll, string address, string? outlet = null, int timeout = 20)
-        {
-            InitializePython(pythonDll);
-            return new KasaSwitch(address, outlet, timeout);
-        }
-
+        
         public string Address { get; set; }
         public string? Outlet { get; set; }
         public int Timeout { get; set; }
-
-        private static void InitializePython(string pythonDll)
-        {
-            PythonEnvironment.StartUp(pythonDll);
-        }
-
-        public static bool IsSwitchOn(string pythonDll, string address, string? outlet = null, int timeout = 20)
-        {
-            using var kasaSwitch = Factory(pythonDll, address, outlet, timeout);
-            return kasaSwitch.IsOn;
-        }
 
         public bool IsOn
         {
@@ -69,19 +52,15 @@ namespace PyKasa.Net
 
         private dynamic Device(KasaCallEnvironment environment)
         {
+            if(string.IsNullOrEmpty(Address)) throw new EmptyAddressException();
             var device = environment.Runner.run(environment.Kasa.Discover.connect_single(Address, timeout: Timeout));
             environment.Runner.run(device.update());
 
             if (!device.is_strip) return device;
             if (Outlet == null)
-                throw new ArgumentNullException(nameof(Outlet));
+                throw new EmptyOutletException($"No outlet provided for device at IP {Address}");
 
             return device.get_plug_by_name(Outlet);
-        }
-
-        public void Dispose()
-        {
-//            PythonEnvironment.Shutdown();
         }
     }
 }

@@ -11,21 +11,20 @@ namespace PyKasa.Net.Tests
         [TestMethod()]
         public void TurnOnOffTest()
         {
-            using (var kasaSwitch = KasaSwitch.Factory(PythonDll, TargetIpAddress))
-            {
-                kasaSwitch.TurnOn();
-                Assert.IsTrue(kasaSwitch.IsOn);
-                kasaSwitch.TurnOff();
-                Assert.IsFalse(kasaSwitch.IsOn);
-            }
+            using var factory = new KasaDeviceFactory(PythonDll);
+            var kasaSwitch = factory.CreateDevice(TargetIpAddress);
 
-            using (var kasaSwitch2 = KasaSwitch.Factory(PythonDll, TargetIpAddress))
-            {
-                kasaSwitch2.TurnOn();
-                Assert.IsTrue(kasaSwitch2.IsOn);
-                kasaSwitch2.TurnOff();
-                Assert.IsFalse(kasaSwitch2.IsOn);
-            }
+            kasaSwitch.TurnOn();
+            Assert.IsTrue(kasaSwitch.IsOn);
+            kasaSwitch.TurnOff();
+            Assert.IsFalse(kasaSwitch.IsOn);
+
+            var kasaSwitch2 = factory.CreateDevice(TargetIpAddress);
+
+            kasaSwitch2.TurnOn();
+            Assert.IsTrue(kasaSwitch2.IsOn);
+            kasaSwitch2.TurnOff();
+            Assert.IsFalse(kasaSwitch2.IsOn);
         }
     }
 }
