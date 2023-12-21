@@ -11,4 +11,4 @@ It queries TP-Link Kasa devices configured in appsettings.json and updates the s
 Currently experimenting with setting up a virtual or pseudo-virtual environment for application to run as a service. Running as an application should work fine with globally available Python modules. With a \Lib\site-packages directory in the same directory as KasaMatricIntegration.exe, you may be able to run as a service under your normal login user.
 
 # Appsettings
-See [Appsettings.json](KasaMatricIntegration/Appsettings.json) for latest settings
+See [Appsettings.json](KasaIntegration/Appsettings.json) for latest settings
