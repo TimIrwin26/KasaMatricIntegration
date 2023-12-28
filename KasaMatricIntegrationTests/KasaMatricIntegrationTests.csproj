@@ -19,9 +19,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\KasaIntegration\KasaMatricIntegration.csproj" />
-    <Reference Include="MatricIntegration, Version=2.0.0.0, Culture=neutral, processorArchitecture=AMD64">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\KasaIntegration\lib\MatricIntegration.dll</HintPath>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="MatricIntegration">
+      <HintPath>C:\Program Files\Ex Machina\MATRIC Desktop\MatricIntegration.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>

@@ -4,8 +4,6 @@ using Matric.Integration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PyKasa.Net;
-using Python.Runtime;
 using System.Collections.Concurrent;
 
 namespace KasaMatricIntegration.MatricIntegration
@@ -15,9 +13,8 @@ namespace KasaMatricIntegration.MatricIntegration
         public static string ApplicationName = "MatricKasaIntegration";
 
         private readonly IConfiguration _configuration;
-        private readonly MatricConfig _config = new();
         private readonly ILogger<MatricService> _logger;
-        private readonly IKasaDeviceFactory _kasaDeviceFactory;
+        private readonly MatricConfig _config = new();
 
         private Lazy<global::Matric.Integration.Matric> _matricInstance;
         private global::Matric.Integration.Matric MatricInstance => _matricInstance.Value;
@@ -26,21 +23,19 @@ namespace KasaMatricIntegration.MatricIntegration
         private const int MatricClientRecheckFrequency = 100;
         private int MatricClientRecheckCountdown;
 
-        private readonly ConcurrentDictionary<KasaItem, int> _deviceFaults = [];
-        public const int MaxFaults = 10;
         private const string PressEvent = "press";
         private const string ReleaseEvent = "Release";
         private Exception? _matricError;
 
-        IEnumerable<string?> KasaVariableNames => _config.KasaVariables.Select(v => v.Name);
+        private IKasaDeviceService _KasaDeviceService;
 
-        public MatricService(IKasaDeviceFactory kasaSwitchFactory, IConfiguration configuration, ILogger<MatricService> logger)
+        public MatricService(IKasaDeviceService kasaDeviceService, IConfiguration configuration, ILogger<MatricService> logger)
         {
             _configuration = configuration;
             _logger = logger;
             configuration.Bind("Matric", _config);
             _matricInstance = new Lazy<global::Matric.Integration.Matric>(AttachMatricApp);
-            _kasaDeviceFactory = kasaSwitchFactory;
+            _KasaDeviceService = kasaDeviceService;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -55,10 +50,15 @@ namespace KasaMatricIntegration.MatricIntegration
 
                     if (!_connectedClients.IsEmpty)
                     {
-                        SetKasaState(_config.KasaVariables, _config.KasaButtons);
+                        SetMatricState(_config.DeviceConfig.Variables, _config.DeviceConfig.Buttons);
                     }
 
-                    await Task.Delay(TimeSpan.FromSeconds(_connectedClients.IsEmpty ? _config.MatricPollingIntervalSeconds : _config.KasaPollingIntervalSeconds), stoppingToken);
+                    var taskDelay = TimeSpan.FromSeconds(
+                        _connectedClients.IsEmpty ?
+                        _config.MatricPollingIntervalSeconds :
+                        _config.DeviceConfig.PollingIntervalSeconds);
+
+                    await Task.Delay(taskDelay, stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -94,22 +94,14 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private void MatricInstance_OnControlInteraction(object sender, object data)
         {
-            if (_config.KasaButtons.Count == 0) return;
+            if (_config.DeviceConfig.Buttons.Count == 0) return;
             if (data == null) return;
 #pragma warning disable CS8604 // Possible null reference argument.
             var controlData = ControlInteractionData.Parse(data.ToString());
 #pragma warning restore CS8604 // Possible null reference argument.
             if (controlData == null) return;
 
-            var button = _config.KasaButtons
-                .Where(b => string.Compare(b.Id, controlData.MessageData?.ControlId, StringComparison.OrdinalIgnoreCase) == 0)
-                .FirstOrDefault();
-
-            if (button == null) return;
-
-            var kasaDevice = _kasaDeviceFactory.CreateDevice(button?.DeviceIp ?? "");
-
-            kasaDevice.SwitchDevice(controlData?.MessageData?.EventName == PressEvent);
+            _KasaDeviceService.SwitchDevice(controlData?.MessageData?.ControlId, controlData?.MessageData?.EventName == PressEvent);
         }
 
         //private void MatricInstance_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
@@ -131,29 +123,29 @@ namespace KasaMatricIntegration.MatricIntegration
             }
         }
 
-        private void SetKasaState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons)
+        private void SetMatricState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons, bool force = false)
         {
-            CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
+            _KasaDeviceService.CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
 
-            SetKasaVariables(kasaVariables);
+            SetVariables(kasaVariables);
 
-            SetKasaButtons(kasaButtons);
+            SetButtons(kasaButtons);
         }
 
-        private void SetKasaVariables(IReadOnlyCollection<KasaVariable> kasaVariables)
+        private void SetVariables(IReadOnlyCollection<KasaVariable> kasaVariables, bool force = false)
         {
             var serverVariables = kasaVariables
-               .Where(k => k.Changed)
+               .Where(k => k.Changed || force)
                .Select(k => k.ToServerVariable());
 
             if (serverVariables.Any())
                 MatricInstance.SetVariables(serverVariables.ToList());
         }
 
-        private void SetKasaButtons(IReadOnlyCollection<KasaButton> kasaButtons)
+        private void SetButtons(IReadOnlyCollection<KasaButton> kasaButtons, bool force = false)
         {
             var buttons = kasaButtons
-               .Where(k => k.Changed)
+               .Where(k => k.Changed || force)
                .Select(k => k.ToButtonStateArgs());
 
             if (!buttons.Any()) return;
@@ -164,41 +156,6 @@ namespace KasaMatricIntegration.MatricIntegration
             }
         }
 
-        private void CheckKasaState(IEnumerable<KasaItem> kasaItems)
-        {
-            var kasaDevice = _kasaDeviceFactory.CreateDevice();
-
-            foreach (var item in kasaItems.Where(k => k != null && !string.IsNullOrEmpty(k.DeviceIp)))
-            {
-                CheckDevice(kasaDevice, item);
-            }
-        }
-
-        private void CheckDevice(IKasaDevice kasaDevice, KasaItem item)
-        {
-            _logger.LogDebug("Checking device at {ip}", item.DeviceIp);
-            try
-            {
-                var countdown = _deviceFaults.AddOrUpdate(item, 0, (key, value) => value--);
-                if (countdown > 0) return;
-
-#pragma warning disable CS8601 // Possible null reference argument.
-                kasaDevice.Address = item.DeviceIp;
-#pragma warning restore CS8601 // Possible null reference argument.
-                kasaDevice.Outlet = item.Outlet;
-                item.IsOn = kasaDevice.IsOn;
-
-                // success
-                item.Faults = 0;
-                _deviceFaults.Remove(item, out countdown);
-            }
-            catch (PythonException pe)
-            {
-                item.Faults++;
-                _logger.LogError("Exception #{count} connecting to {device} at {ip}: {exception}", item.Faults, item.Name, item.DeviceIp, pe.Message);
-                _deviceFaults.AddOrUpdate(item, item.Faults, (key, value) => 2 ^ Math.Max(MaxFaults, item.Faults));
-            }
-        }
 
         private void Matric_OnError(Exception ex) => _matricError = ex;
 
@@ -217,7 +174,7 @@ namespace KasaMatricIntegration.MatricIntegration
 
             if (_connectedClients.IsEmpty) return;
 
-            SetKasaState(_config.KasaVariables, _config.KasaButtons);
+            SetMatricState(_config.DeviceConfig.Variables, _config.DeviceConfig.Buttons, true);
         }
     }
 }

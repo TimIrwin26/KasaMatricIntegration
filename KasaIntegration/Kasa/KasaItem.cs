@@ -1,6 +1,6 @@
 ﻿namespace KasaMatricIntegration.Kasa
 {
-    internal class KasaItem
+    public class KasaItem
     {
         public string? Name { get; set; }
         public string? DeviceIp { get; set; }
@@ -16,7 +16,6 @@
             {
                 Changed = _isOn != value;
                 _isOn = value;
-
             }
         }
 
