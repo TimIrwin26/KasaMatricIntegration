@@ -42,7 +42,7 @@ namespace KasaMatricIntegration.Kasa
             kasaDevice.SwitchDevice(on);
         }
 
-        public void CheckKasaState(IEnumerable<KasaItem> kasaItems)
+        public void CheckState(IEnumerable<KasaItem> kasaItems)
         {
             var kasaDevice = _kasaDeviceFactory.CreateDevice();
 

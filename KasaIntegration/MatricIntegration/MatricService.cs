@@ -1,27 +1,19 @@
 ﻿using KasaMatricIntegration.Kasa;
 using KasaMatricIntegration.Matric;
-using Matric.Integration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
 
 namespace KasaMatricIntegration.MatricIntegration
 {
-    internal class MatricService : BackgroundService
+    internal class MatricService : BackgroundService, IDisposable
     {
-        public static string ApplicationName = "MatricKasaIntegration";
+        public static string ApplicationName = "Kasa Matric Service";
 
-        private readonly IConfiguration _configuration;
         private readonly ILogger<MatricService> _logger;
         private readonly MatricConfig _config = new();
 
-        private Lazy<global::Matric.Integration.Matric> _matricInstance;
-        private global::Matric.Integration.Matric MatricInstance => _matricInstance.Value;
-
-        private ConcurrentBag<ClientInfo> _connectedClients = [];
-        private const int MatricClientRecheckFrequency = 100;
-        private int MatricClientRecheckCountdown;
+        private IMatricAppWrapper _matricInstance;
 
         private const string PressEvent = "press";
         private const string ReleaseEvent = "Release";
@@ -29,12 +21,13 @@ namespace KasaMatricIntegration.MatricIntegration
 
         private IKasaDeviceService _KasaDeviceService;
 
-        public MatricService(IKasaDeviceService kasaDeviceService, IConfiguration configuration, ILogger<MatricService> logger)
+        public MatricService(IKasaDeviceService kasaDeviceService, IMatricAppWrapper matricApp, IConfiguration configuration, ILogger<MatricService> logger)
         {
-            _configuration = configuration;
             _logger = logger;
             configuration.Bind("Matric", _config);
-            _matricInstance = new Lazy<global::Matric.Integration.Matric>(AttachMatricApp);
+            _matricInstance = matricApp;
+            _matricInstance.OnControlInteraction += OnControlInteraction;
+            _matricInstance.OnVariablesChanged += OnVariablesChanged;
             _KasaDeviceService = kasaDeviceService;
         }
 
@@ -46,15 +39,15 @@ namespace KasaMatricIntegration.MatricIntegration
                 {
                     if (_matricError != null) { throw _matricError; }
 
-                    CheckForNewClients();
+                    _matricInstance.CheckForNewClients();
 
-                    if (!_connectedClients.IsEmpty)
+                    if (!_matricInstance.ConnectedClients.IsEmpty)
                     {
                         SetMatricState(_config.DeviceConfig.Variables, _config.DeviceConfig.Buttons);
                     }
 
                     var taskDelay = TimeSpan.FromSeconds(
-                        _connectedClients.IsEmpty ?
+                        _matricInstance.ConnectedClients.IsEmpty ?
                         _config.MatricPollingIntervalSeconds :
                         _config.DeviceConfig.PollingIntervalSeconds);
 
@@ -80,19 +73,9 @@ namespace KasaMatricIntegration.MatricIntegration
             }
         }
 
-        private global::Matric.Integration.Matric AttachMatricApp()
-        {
-            global::Matric.Integration.Matric matricInstance = new global::Matric.Integration.Matric(ApplicationName, _config.Pin, _config.ApiPort);
-            _logger.LogDebug("{Message}", "Connected to matric instance");
-            matricInstance.OnError += Matric_OnError;
-            matricInstance.OnConnectedClientsReceived += Matric_OnConnectedClientsReceived;
-            //matricInstance.OnVariablesChanged += MatricInstance_OnVariablesChanged;
-            matricInstance.OnControlInteraction += MatricInstance_OnControlInteraction;
 
-            return matricInstance;
-        }
 
-        private void MatricInstance_OnControlInteraction(object sender, object data)
+        private void OnControlInteraction(object sender, object data)
         {
             if (_config.DeviceConfig.Buttons.Count == 0) return;
             if (data == null) return;
@@ -104,31 +87,17 @@ namespace KasaMatricIntegration.MatricIntegration
             _KasaDeviceService.SwitchDevice(controlData?.MessageData?.ControlId, controlData?.MessageData?.EventName == PressEvent);
         }
 
-        //private void MatricInstance_OnVariablesChanged(object sender, ServerVariablesChangedEventArgs data)
-        //{
-        //    var kasaVariables = _config.KasaVariables.Select(v => v.Name);
-        //    if (!data.ChangedVariables.Intersect(kasaVariables).Any()) return;
-
-
-        //}
-
-        private void CheckForNewClients()
+        private void OnVariablesChanged(object sender, global::Matric.Integration.ServerVariablesChangedEventArgs data)
         {
-            // check for new client connections
-            MatricClientRecheckCountdown--;
-            if (MatricClientRecheckCountdown <= 0)
-            {
-                MatricInstance.GetConnectedClients();
-                MatricClientRecheckCountdown = _connectedClients.IsEmpty ? 1 : MatricClientRecheckFrequency;
-            }
+/*            var kasaVariables = _config.KasaVariables.Select(v => v.Name);
+            if (!data.ChangedVariables.Intersect(kasaVariables).Any()) return;*/
         }
 
         private void SetMatricState(IReadOnlyCollection<KasaVariable> kasaVariables, IReadOnlyCollection<KasaButton> kasaButtons, bool force = false)
         {
-            _KasaDeviceService.CheckKasaState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
+            _KasaDeviceService.CheckState(((IEnumerable<KasaItem>)kasaVariables).Union(kasaButtons));
 
             SetVariables(kasaVariables);
-
             SetButtons(kasaButtons);
         }
 
@@ -139,7 +108,7 @@ namespace KasaMatricIntegration.MatricIntegration
                .Select(k => k.ToServerVariable());
 
             if (serverVariables.Any())
-                MatricInstance.SetVariables(serverVariables.ToList());
+                _matricInstance.SetVariables(serverVariables.ToList());
         }
 
         private void SetButtons(IReadOnlyCollection<KasaButton> kasaButtons, bool force = false)
@@ -150,31 +119,10 @@ namespace KasaMatricIntegration.MatricIntegration
 
             if (!buttons.Any()) return;
 
-            foreach (var client in _connectedClients)
+            foreach (var client in _matricInstance.ConnectedClients)
             {
-                MatricInstance.SetButtonsVisualState(client.Id, buttons.ToList());
+                _matricInstance.SetButtonsVisualState(client.Id, buttons.ToList());
             }
-        }
-
-
-        private void Matric_OnError(Exception ex) => _matricError = ex;
-
-        private void Matric_OnConnectedClientsReceived(object source, List<ClientInfo> clients) => UpdateClientsList(clients);
-
-        public void UpdateClientsList(List<ClientInfo> connectedClients)
-        {
-            _connectedClients.Clear(); // not the greatest idea from a threaded perspective
-            _logger.LogDebug("{Message}", $"Connected with {connectedClients.Count} clients.");
-
-            foreach (var client in connectedClients)
-            {
-                _connectedClients.Add(client);
-                _logger.LogDebug("{Message}", $"Client: {client.Name}");
-            }
-
-            if (_connectedClients.IsEmpty) return;
-
-            SetMatricState(_config.DeviceConfig.Variables, _config.DeviceConfig.Buttons, true);
         }
     }
 }

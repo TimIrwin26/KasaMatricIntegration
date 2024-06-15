@@ -1,4 +1,5 @@
 ﻿using KasaMatricIntegration.Kasa;
+using KasaMatricIntegration.Matric;
 using KasaMatricIntegration.MatricIntegration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,8 +15,10 @@ builder.Services.AddSingleton<IKasaDeviceFactory>((service) =>
     var timeout = configuration?.GetValue<int?>("timeout") ?? 20;
     return new KasaDeviceFactory(dll, timeout);
 });
-
+var matricConfig = builder.Configuration.GetSection("Matric");
+builder.Services.Configure<MatricConfig>(matricConfig);
 builder.Services.AddSingleton<IKasaDeviceService, KasaDeviceService>();
+builder.Services.AddSingleton<IMatricAppWrapper, MatricAppWrapper>();
 
 builder.Services.AddHostedService<MatricService>();
 builder.Services.AddWindowsService(options =>
@@ -33,6 +36,8 @@ builder.Services.AddLogging(logging =>
     logging.AddDebug();
 #endif
 });
+
+
 using var host = builder.Build();
 
 MatricPrompt.MatricPin(builder.Configuration);
